@@ -1,0 +1,10 @@
+fiftyone:
+  version: ">=1.3.0"
+name: "@adonaivera/fiftyone-sparse-concepts"
+version: "0.1.0"
+description: "SpLiCE: Sparse Linear Concept Embeddings for FiftyOne"
+url: "https://github.com/adonaivera/fiftyone-sparse-concepts"
+operators:
+  - decompose_class_concepts
+  - decompose_dataset_concepts
+  - decompose_image_concepts
