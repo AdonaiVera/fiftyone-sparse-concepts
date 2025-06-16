@@ -2,6 +2,7 @@
 
 A custom **FiftyOne plugin** for exploring and interpreting image-level and dataset-level concept decompositions using **SpLiCE** (Sparse Linear Concept Embeddings). This toolkit helps users visualize, analyze, and detect **spurious correlations** in datasets using interpretable CLIP embeddings.
 
+[Screencast from 2025-06-15 22-48-55.webm](https://github.com/user-attachments/assets/2d3ac7f9-b63c-4eb3-906d-8568c73dca9d)
 
 
 ## 🚀 What This Plugin Offers
