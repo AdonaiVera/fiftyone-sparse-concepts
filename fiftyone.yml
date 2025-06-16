@@ -4,7 +4,9 @@ name: "@adonaivera/fiftyone-sparse-concepts"
 version: "0.1.0"
 description: "SpLiCE: Sparse Linear Concept Embeddings for FiftyOne"
 url: "https://github.com/adonaivera/fiftyone-sparse-concepts"
+license: Apache 2.0
+panels:
+  - decompose_core_panel
 operators:
-  - decompose_class_concepts
-  - decompose_dataset_concepts
-  - decompose_image_concepts
+  - decompose_core_concepts
+
