@@ -44,7 +44,10 @@ class DecomposeCoreConcepts(foo.Operator):
                 "vocab_size": 10000,
                 "l1_penalty": 0.25,
                 "top_k": 10,
-                "batch_size": 32
+                "batch_size": 32,
+                "return_cosine": True,
+                "save_l0_norm": True,
+                "label_field": "concepts"
             }
         ctx = foo.ExecutionContext()
         ctx._dataset = sample_collection
@@ -86,6 +89,27 @@ class DecomposeCoreConcepts(foo.Operator):
             min=1,
             max=256
         )
+        
+        inputs.bool(
+            "return_cosine",
+            default=True,
+            label="Return Cosine Similarity",
+            description="Calculate and store cosine similarity (reconstruction error) between original and reconstructed embeddings"
+        )
+        
+        inputs.bool(
+            "save_l0_norm",
+            default=True,
+            label="Save L0 Norm",
+            description="Calculate and store L0 norm (sparsity measure) of the concept decomposition"
+        )
+        
+        inputs.str(
+            "label_field",
+            default="concepts",
+            label="Label Field",
+            description="Field name to store the concept classifications"
+        )
 
         return types.Property(inputs)
 
@@ -110,6 +134,9 @@ class DecomposeCoreConcepts(foo.Operator):
             vocab_size = ctx.params.get("vocab_size")
             l1_penalty = ctx.params.get("l1_penalty")
             top_k = ctx.params.get("top_k")
+            return_cosine = ctx.params.get("return_cosine")
+            save_l0_norm = ctx.params.get("save_l0_norm")
+            label_field = ctx.params.get("label_field")
 
             model_config = SpliceModelConfig(
                 {
@@ -118,8 +145,8 @@ class DecomposeCoreConcepts(foo.Operator):
                     "vocabulary_size": vocab_size,
                     "l1_penalty": l1_penalty,
                     "top_k": top_k,
-                    "return_cosine": True,  # TODO: make this configurable
-                    "save_l0_norm": True,  # TODO: make this configurable
+                    "return_cosine": return_cosine,
+                    "save_l0_norm": save_l0_norm,
                 }
             )
 
@@ -127,7 +154,7 @@ class DecomposeCoreConcepts(foo.Operator):
 
             dataset.apply_model(
                 splicemodel,
-                label_field="concepts", # TODO: make this configurable
+                label_field=label_field,
                 batch_size=batch_size,
             )
 

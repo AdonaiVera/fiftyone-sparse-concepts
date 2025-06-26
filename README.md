@@ -98,6 +98,9 @@ foo.execute_operator(
         "l1_penalty": 0.25,
         "top_k": 10,
         "batch_size": 32,
+        "return_cosine": True,     
+        "save_l0_norm": True,       
+        "label_field": "concepts",  
     },
 )
 
