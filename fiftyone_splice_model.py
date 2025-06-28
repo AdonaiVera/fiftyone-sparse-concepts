@@ -128,18 +128,16 @@ class ConceptPostProcessor:
 
         labels = []
         for i in range(batch_size):
-
             label = fol.Classifications(
                 classifications = [
                     fol.Classification(
                         label=concepts[i, j],
-                        weight=weights[i, j],
+                        weight=weights[i, indicies[i, j]],
                     ) for j in range(self.top_k)
                 ],
                 l0_norm=None if not self.save_l0_norm else l0_norms[i],
                 reconstruction_error=None if not self.save_reconstruction_error else cosine[i],
             )
-
             labels.append(label)
         
         return labels

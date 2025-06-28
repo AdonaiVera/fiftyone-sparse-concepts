@@ -38,34 +38,39 @@ class DecomposeCorePanel(foo.Panel):
 
     def _update(self, ctx):
         page = ctx.panel.get_state("page", 1)
+        label_field = ctx.params.get("label_field", "concepts")
 
         if page == 1:
+            # Dataset-level aggregation
             concept_agg = defaultdict(list)
             total_samples = 0
-            l0_norms = []
-            cosine_sims = []
+            all_l0_norms = []
+            all_cosine_sims = []
 
             for sample in ctx.dataset:
-                concepts = getattr(sample, "splice_concepts", None)
-                if not concepts:
+                labels_obj = sample[label_field] if label_field in sample else None
+                if not labels_obj or not labels_obj.classifications:
                     continue
-
+                
                 total_samples += 1
-                for concept in concepts:
-                    concept_agg[concept["concept"]].append(concept["weight"])
-
-                l0_norms.append(getattr(sample, "splice_l0_norm", 0))
-                cosine_sims.append(getattr(sample, "splice_cosine_sim", 0))
+                for classification in labels_obj.classifications:
+                    concept_agg[classification.label].append(classification.weight)
+                
+                if hasattr(labels_obj, 'l0_norm') and labels_obj.l0_norm is not None:
+                    all_l0_norms.append(labels_obj.l0_norm)
+                if hasattr(labels_obj, 'reconstruction_error') and labels_obj.reconstruction_error is not None:
+                    all_cosine_sims.append(labels_obj.reconstruction_error)
 
             concept_stats = [
                 {
                     "concept": name,
                     "mean_weight": sum(weights) / len(weights),
-                    "count": len(weights)
+                    "count": len(weights),
                 }
                 for name, weights in concept_agg.items()
             ]
             concept_stats = sorted(concept_stats, key=lambda x: x["mean_weight"], reverse=True)[:20]
+
             ctx.panel.state.set("dataset_table", concept_stats)
 
             ctx.panel.state.set(
@@ -78,24 +83,28 @@ class DecomposeCorePanel(foo.Panel):
                 },
             )
 
+            avg_l0 = sum(all_l0_norms) / len(all_l0_norms) if all_l0_norms else 0
+            avg_cos = sum(all_cosine_sims) / len(all_cosine_sims) if all_cosine_sims else 0
+            
             ctx.panel.state.set(
                 "dataset_info_md",
                 f"""
                 ###### 📉 Decomposition Statistics
                 | Metric | Value |
                 |--------|-------|
-                | **Avg. Decomposition L0 Norm** | `{sum(l0_norms)/len(l0_norms):.4f}` |
-                | **Avg. CLIP–SpLiCE Cosine Similarity** | `{sum(cosine_sims)/len(cosine_sims):.4f}` |
+                | **Avg. Decomposition L0 Norm** | `{avg_l0:.4f}` |
+                | **Avg. CLIP–SpLiCE Cosine Similarity** | `{avg_cos:.4f}` |
                 """
             )
 
         elif page == 2:
+            # Class-level aggregation
+            all_detections = ctx.dataset.values("ground_truth.detections.label")
+
             labels = set()
-            for sample in ctx.dataset:
-                detections = getattr(sample, "ground_truth", None)
-                if detections and detections.detections:
-                    for det in detections.detections:
-                        labels.add(det.label)
+            for dets in all_detections:
+                if dets:
+                    labels.update(dets)
 
             label_choices = sorted(labels)
             ctx.panel.state.set("class_choices", label_choices)
@@ -104,27 +113,31 @@ class DecomposeCorePanel(foo.Panel):
             ctx.panel.state.set("selected_class", selected_class)
 
             concept_agg = defaultdict(list)
-            l0_norms = []
-            cosine_sims = []
+            filtered_l0 = []
+            filtered_cos = []
 
             for sample in ctx.dataset:
+                # Check if this sample has the selected class
                 detections = getattr(sample, "ground_truth", None)
                 if not detections or not detections.detections:
                     continue
-
-                labels_in_sample = [det.label for det in detections.detections]
-                if selected_class not in labels_in_sample:
+                
+                sample_labels = [det.label for det in detections.detections]
+                if selected_class not in sample_labels:
                     continue
-
-                concepts = getattr(sample, "splice_concepts", None)
-                if not concepts:
+                
+                # Get concept classifications
+                labels_obj = sample[label_field] if label_field in sample else None
+                if not labels_obj or not labels_obj.classifications:
                     continue
-
-                for concept in concepts:
-                    concept_agg[concept["concept"]].append(concept["weight"])
-
-                l0_norms.append(getattr(sample, "splice_l0_norm", 0))
-                cosine_sims.append(getattr(sample, "splice_cosine_sim", 0))
+                
+                for classification in labels_obj.classifications:
+                    concept_agg[classification.label].append(classification.weight)
+                
+                if hasattr(labels_obj, 'l0_norm') and labels_obj.l0_norm is not None:
+                    filtered_l0.append(labels_obj.l0_norm)
+                if hasattr(labels_obj, 'reconstruction_error') and labels_obj.reconstruction_error is not None:
+                    filtered_cos.append(labels_obj.reconstruction_error)
 
             concept_stats = [
                 {
@@ -135,6 +148,7 @@ class DecomposeCorePanel(foo.Panel):
                 for name, weights in concept_agg.items()
             ]
             concept_stats = sorted(concept_stats, key=lambda x: x["mean_weight"], reverse=True)[:20]
+
             ctx.panel.state.set("class_table", concept_stats)
 
             ctx.panel.state.set(
@@ -147,7 +161,9 @@ class DecomposeCorePanel(foo.Panel):
                 },
             )
 
-            if l0_norms:
+            if filtered_l0:
+                avg_l0 = sum(filtered_l0) / len(filtered_l0)
+                avg_cos = sum(filtered_cos) / len(filtered_cos) if filtered_cos else 0
                 ctx.panel.state.set(
                     "class_info_md",
                     f"""
@@ -155,8 +171,8 @@ class DecomposeCorePanel(foo.Panel):
 
                     | Metric | Value |
                     |--------|-------|
-                    | **Avg. Decomposition L0 Norm** | `{sum(l0_norms)/len(l0_norms):.4f}` |
-                    | **Avg. CLIP–SpLiCE Cosine Similarity** | `{sum(cosine_sims)/len(cosine_sims):.4f}` |
+                    | **Avg. Decomposition L0 Norm** | `{avg_l0:.4f}` |
+                    | **Avg. CLIP–SpLiCE Cosine Similarity** | `{avg_cos:.4f}` |
                     """
                 )
         elif page == 3:
@@ -167,14 +183,23 @@ class DecomposeCorePanel(foo.Panel):
                 return
 
             sample = ctx.dataset[sel[0]]
-            concepts = getattr(sample, "splice_concepts", None)
-            if not concepts:
+            labels_obj = sample[label_field] if label_field in sample else None
+            if not labels_obj or not labels_obj.classifications:
                 ctx.panel.state.set("concept_data", None)
                 ctx.panel.state.set("image_info_md", "⚠️ No concept decomposition found.")
                 return
 
-            x = [c["weight"] for c in concepts]
-            y = [c["concept"] for c in concepts]
+            x = [c.weight for c in labels_obj.classifications]
+            y = [c.label for c in labels_obj.classifications]
+
+            concept_table = [
+                {"concept": c.label, "mean_weight": c.weight, "count": 1}
+                for c in labels_obj.classifications
+            ]
+
+            l0 = getattr(labels_obj, "l0_norm", 0)
+            cos = getattr(labels_obj, "reconstruction_error", 0)
+            filename = sample.filepath.split("/")[-1]
 
             ctx.panel.state.set(
                 "concept_data",
@@ -185,15 +210,6 @@ class DecomposeCorePanel(foo.Panel):
                     "orientation": "h",
                 },
             )
-
-            l0 = getattr(sample, "splice_l0_norm", 0)
-            cos = getattr(sample, "splice_cosine_sim", 0)
-            filename = sample.filepath.split("/")[-1]
-
-            concept_table = [
-                {"concept": c["concept"], "mean_weight": c["weight"], "count": 1}
-                for c in concepts
-            ]
             ctx.panel.state.set("image_table", concept_table)
 
             ctx.panel.state.set(
@@ -208,29 +224,34 @@ class DecomposeCorePanel(foo.Panel):
                 """
             )
         elif page == 4:
+            # Spurious correlation analysis
             concept_hist = defaultdict(lambda: defaultdict(int))
             all_concepts = set()
-            all_labels = set()
+            all_classes = set()
 
             for sample in ctx.dataset:
-                concepts = getattr(sample, "splice_concepts", None)
+                # Get detections
                 detections = getattr(sample, "ground_truth", None)
-
-                if not concepts or not detections or not detections.detections:
+                if not detections or not detections.detections:
                     continue
-
-                labels = {det.label for det in detections.detections}
-                all_labels.update(labels)
-
-                for concept in concepts:
-                    all_concepts.add(concept["concept"])
-                    for label in labels:
-                        concept_hist[concept["concept"]][label] += 1
+                
+                sample_labels = [det.label for det in detections.detections]
+                all_classes.update(sample_labels)
+                
+                # Get concept classifications
+                labels_obj = sample[label_field] if label_field in sample else None
+                if not labels_obj or not labels_obj.classifications:
+                    continue
+                
+                for classification in labels_obj.classifications:
+                    all_concepts.add(classification.label)
+                    for cls in sample_labels:
+                        concept_hist[classification.label][cls] += 1
 
             concept_choices = sorted(all_concepts)
             ctx.panel.state.set("concept_choices", concept_choices)
 
-            selected_concept = ctx.panel.get_state("selected_concept", concept_choices[0])
+            selected_concept = ctx.panel.get_state("selected_concept", concept_choices[0] if concept_choices else None)
             ctx.panel.state.set("selected_concept", selected_concept)
 
             data = concept_hist[selected_concept]
