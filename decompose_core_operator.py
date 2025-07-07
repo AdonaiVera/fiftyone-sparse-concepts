@@ -1,7 +1,7 @@
 import fiftyone.operators as foo
 import fiftyone.operators.types as types
 import torch
-from .splice import load, get_preprocess, get_vocabulary, decompose_image
+from .fiftyone_splice_model import SpliceModelConfig, SpliceModel 
 from PIL import Image
 from tqdm import tqdm
 import logging
@@ -111,67 +111,31 @@ class DecomposeCoreConcepts(foo.Operator):
             l1_penalty = ctx.params.get("l1_penalty")
             top_k = ctx.params.get("top_k")
 
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            model_config = SpliceModelConfig(
+                {
+                    "model_name": model_name,
+                    "vocabulary_name": vocabulary,
+                    "vocabulary_size": vocab_size,
+                    "l1_penalty": l1_penalty,
+                    "top_k": top_k,
+                    "return_cosine": True,  # TODO: make this configurable
+                    "save_l0_norm": True,  # TODO: make this configurable
+                }
+            )
 
-            splicemodel = load(model_name, vocabulary, vocab_size, device, l1_penalty=l1_penalty, return_weights=True)
-            preprocess = get_preprocess(model_name)
-            vocab = get_vocabulary(vocabulary, vocab_size)
+            splicemodel = SpliceModel(model_config)
 
-            total_samples = len(dataset)
-            logger.info(f"Processing {total_samples} samples in batches of {batch_size}")
-
-            with torch.no_grad(): 
-                for i, batch in enumerate(tqdm(batch_generator(dataset, batch_size), total=(total_samples + batch_size - 1) // batch_size)):
-                    batch_images = []
-                    batch_samples = []
-                    
-                    for sample in batch:
-                        try:
-                            image = Image.open(sample.filepath)
-                            batch_images.append(image)
-                            batch_samples.append(sample)
-                        except (FileNotFoundError, OSError) as e:
-                            logger.warning(f"Could not open image {sample.filepath}: {str(e)}. Skipping...")
-                            continue
-                    
-                    if not batch_images:
-                        continue
-
-                    # Process batch
-                    for image, sample in zip(batch_images, batch_samples):
-                        try:
-                            img_tensor = preprocess(image).to(device).unsqueeze(0)
-                            weights, l0_norm, cosine = decompose_image(img_tensor, splicemodel, device)
-
-                            _, indices = torch.sort(weights.squeeze(), descending=True)
-                            top_concepts = [
-                                {
-                                    "concept": vocab[idx.item()],
-                                    "weight": float(weights[0, idx.item()].item())
-                                }
-                                for idx in indices[:top_k]
-                                if weights[0, idx.item()].item() > 0
-                            ]
-
-                            sample["splice_concepts"] = top_concepts
-                            sample["splice_l0_norm"] = l0_norm
-                            sample["splice_cosine_sim"] = cosine
-                            sample.save()
-                        except Exception as e:
-                            logger.error(f"Error processing {sample.filepath}: {str(e)}")
-                            continue
-
-                    # Clean up memory after each batch
-                    clean_memory()
-
-            dataset.save()
+            dataset.apply_model(
+                splicemodel,
+                label_field="concepts", # TODO: make this configurable
+                batch_size=batch_size,
+            )
 
             ctx.ops.reload_dataset()
             if hasattr(ctx.ops, "refresh"):
                 ctx.ops.refresh()
 
             logger.info("Concept decomposition completed successfully")
-            return {"message": f"Processed {total_samples} samples."}
 
         except Exception as e:
             logger.error(f"Error in execute: {str(e)}")

@@ -157,10 +157,16 @@ class SPLICE(nn.Module):
         recon_image = self.recompose_image(weights)
 
         if self.return_weights and self.return_cosine:
-            return (weights, torch.diag(recon_image @ image.T).sum())
+            product = recon_image * image
+            cosine = product.sum(dim=1) / (torch.norm(recon_image, dim=1) * torch.norm(image, dim=1))
+            cosine = 1 - cosine  # Convert to distance
+            return (weights, cosine)
         
         if self.return_cosine:
-            return (recon_image, torch.diag(recon_image @ image.T).sum())
+            product = recon_image * image
+            cosine = product.sum(dim=1) / (torch.norm(recon_image, dim=1) * torch.norm(image, dim=1))
+            cosine = 1 - cosine  # Convert to distance
+            return (recon_image, cosine)
         
         return recon_image
     

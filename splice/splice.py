@@ -255,7 +255,12 @@ def get_preprocess(name: str):
     else:
         raise RuntimeError(f"Library {name} not supported. Try manual construction instead.")
     
-def decompose_image(image, splicemodel=None, device="cpu"):
+def decompose_image(
+    image,
+    splicemodel=None,
+    device="cpu",
+    return_cosine=False,
+):
     """decompose_image _summary_
 
     Parameters
@@ -272,9 +277,13 @@ def decompose_image(image, splicemodel=None, device="cpu"):
     splicemodel.eval()
 
     splicemodel.return_weights = True
-    splicemodel.return_cosine = True
+    splicemodel.return_cosine = return_cosine
 
-    (weights, cosine) = splicemodel.encode_image(image.to(device))
-    l0_norm = torch.linalg.vector_norm(weights.squeeze(), ord=0).item()
-
-    return weights, l0_norm, cosine.item()
+    res = splicemodel.encode_image(image.to(device))
+    if not return_cosine:
+        weights = res
+        return weights
+    else:
+        weights, cosine = res
+        return weights, cosine
+        
