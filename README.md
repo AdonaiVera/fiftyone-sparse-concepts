@@ -12,57 +12,67 @@ This operator performs per-image concept decomposition using a CLIP-based model 
 
 #### ✅ Features
 
-* Supports multiple backbones:
+* **Multiple CLIP Backbones**:
   * `open_clip:ViT-B-32` (default)
   * `clip:ViT-B/32`, `ViT-B/16`, `RN50`
-* Works with various vocabularies:
+* **Flexible Vocabularies**:
   * `laion`, `mscoco`, `laion_bigrams`
-* Allows custom tuning:
+* **Customizable Parameters**:
   * `vocab_size`, `l1_penalty`, `top_k concepts`, `batch_size`
-* Stores for each image:
-  * `splice_concepts`: list of top contributing concepts with weights
-  * `splice_l0_norm`: decomposition sparsity
-  * `splice_cosine_sim`: similarity to original CLIP vector
+* **Rich Output Data**:
+  * `concepts`: list of top contributing concepts with weights
+  * `l0_norm`: decomposition sparsity measure
+  * `reconstruction_error`: similarity to original CLIP vector
 
-### 📊 Panel: `ImageSplicePanel`
+### 📊 Panel: `Concept Decomposition`
 
-An interactive panel interface with **four analytical views**, powered by the operator’s outputs.
+An interactive panel interface with **dynamic view-based analysis** for comprehensive concept exploration.
 
-#### 📍 Pages Overview
+#### 🎯 **Key Capabilities**
 
-1. **Dataset-Level Concept Summary**
+**🔄 Dynamic View Integration**: The panel automatically responds to your current FiftyOne view, showing concept statistics for filtered subsets of your data.
 
-   * View top x most influential concepts across the dataset
-   * Inspect average weight and number of occurrences
+**📈 Multi-Level Analysis**: From dataset-wide trends to individual image insights, explore concepts at every level.
 
-2. **Class-Level Decomposition**
+**🔍 Bias Detection**: Identify spurious correlations and dataset biases that could affect model performance.
 
-   * Select any class and view the top concepts associated with it
-   * Helps understand how the model's embeddings represent specific classes
+#### 📍 **Pages Overview**
 
-3. **Image-Level Decomposition**
+Page 1. **📊 Dataset-Level Concept Summary**
+   * **Dynamic view analysis** - automatically updates based on your current view
+   * **Top x concepts** ranked by average contribution across samples
+   * **Mean weights and occurrence counts** for each concept
+   * **Overall statistics**: L0 norm and cosine similarity metrics
+   * **Perfect for**: Understanding what concepts dominate your dataset or filtered view
 
-   * When an image is selected, shows its individual concept decomposition
-   * Includes a refresh button for up-to-date stats
+   **🏷️ Class-Level Decomposition**
+   * **Class-specific analysis** - select any class to see associated concepts
+   * **Filtered statistics** for samples containing the selected class
+   * **Concept-class relationships** to understand how models represent specific categories
+   * **Perfect for**: Understanding how different classes are represented in concept space
 
-4. **Spurious Correlation Discovery**
+   **🖼️ Image-Level Decomposition**
+   * **Individual image analysis** - select any image to see its concept breakdown
+   * **Detailed concept weights** and individual metrics
+   * **Real-time updates** when selecting different images
+   * **Perfect for**: Debugging specific images or understanding individual predictions
 
-   * Visual tool to detect potential dataset biases
-   * Select a concept and observe its distribution across class labels
-   * Great for spotting shortcuts or correlations the model may exploit
+Page 2. **🧪 Spurious Correlation Discovery**
+   * **Bias detection tool** - identify unintended concept-class correlations
+   * **Visual correlation analysis** across all classes
+   * **Dataset shortcut identification** that models might exploit
+   * **Perfect for**: Finding and fixing dataset biases before they affect model training
 
 ## 🔌 Installation
 
 ### 1. Choose a CLIP backend
 
-* **OpenCLIP**:
-
+**OpenCLIP** (recommended):
 ```bash
 pip install open_clip_torch
 ```
 
-* **OpenAI CLIP**:
-
+**OpenAI CLIP**:
 ```bash
 pip install git+https://github.com/openai/CLIP.git
 ```
@@ -77,16 +87,17 @@ fiftyone plugins download https://github.com/AdonaiVera/fiftyone-sparse-concepts
 
 ## 🔍 How to Use
 
-1. **Run the operator** on a view or dataset:
+### **Step 1: Run the Concept Decomposition Operator**
 
 ```python
 import fiftyone as fo
 import fiftyone.zoo as foz
 import fiftyone.operators as foo
 
-# Load the dataset
-dataset = foz.load_zoo_dataset("quickstart", max_samples=10)
+# Load your dataset
+dataset = foz.load_zoo_dataset("quickstart", max_samples=100)
 
+# Run the SpLiCE decomposition
 foo.execute_operator(
     "@adonaivera/fiftyone-sparse-concepts/decompose_core_concepts",
     dataset=dataset,
@@ -103,38 +114,82 @@ foo.execute_operator(
         "label_field": "concepts",  
     },
 )
+```
 
-# Launch the app
+### **Step 2: Launch FiftyOne and Explore**
+
+```python
 session = fo.launch_app(dataset)
 session.wait()
 ```
 
-2. **Switch to the panel** `Concept Decomposition`
-3. **Explore pages** to:
-   * Analyze overall dataset trends
-   * Focus on specific classes
-   * Inspect individual image decompositions
-   * Discover and visualize spurious correlations
+### **Step 3: Use the Concept Decomposition Panel**
+
+1. **Switch to the panel**: Look for "Concept Decomposition" in your panels
+2. **Start with Page 1**: Get an overview of your dataset's concept distribution
+3. **Filter your view**: Use FiftyOne's filtering tools to explore specific subsets
+4. **Navigate between pages**: Use the arrow navigation to explore different analysis levels
+5. **Select classes**: Use the dropdown on page 2 to analyze concepts for specific classes
+6. **Select images**: Click on images to see their individual concept breakdowns on page 3
+7. **Discover biases**: Use page 4 to identify spurious correlations
+
+## 🎯 **Practical Use Cases**
+
+### **🔍 Dataset Analysis**
+- **Understand your data**: See what concepts dominate your dataset or filtered views
+- **Quality assessment**: Identify potential biases or data quality issues
+- **Subset comparison**: Compare concept distributions across different data splits
+
+### **🧠 Model Interpretability**
+- **Debug predictions**: Understand why your model makes specific decisions
+- **Concept discovery**: Find human-interpretable concepts your model learns
+- **Bias detection**: Identify spurious correlations that could affect fairness
+
+### **📊 Research & Development**
+- **Dataset curation**: Use concept analysis to improve dataset quality
+- **Model comparison**: Compare concept representations across different models
+- **Ablation studies**: Understand which concepts are most important for performance
+
+### **🚀 Production Monitoring**
+- **Drift detection**: Monitor concept distributions for data drift
+- **Quality control**: Ensure new data maintains expected concept patterns
+- **Explainability**: Provide interpretable explanations for model decisions
+
+## 💡 **Pro Tips**
+
+### **Getting the Most from Dynamic Views**
+1. **Filter by class**: Use FiftyOne's class filters to see concept distributions for specific categories
+2. **Filter by metadata**: Explore concepts in specific subsets (e.g., high-confidence predictions)
+3. **Compare splits**: Create views for train/val/test sets and compare concept distributions
+4. **Temporal analysis**: Filter by date ranges to see how concepts change over time
+
+### **Understanding the Metrics**
+- **L0 Norm**: Lower values indicate sparser (more focused) concept representations
+- **Cosine Similarity**: Higher values indicate better reconstruction of original embeddings
+- **Mean Weight**: Higher values indicate more influential concepts
+- **Count**: Shows how frequently a concept appears across samples
+
+### **Optimizing Parameters**
+- **`l1_penalty`**: Increase for sparser decompositions, decrease for denser ones
+- **`top_k`**: Increase to see more concepts per image, decrease for focus on top concepts
+- **`vocab_size`**: Larger vocabularies offer more concept diversity but may be less interpretable
 
 
-## 🔮 Future Functionality
 
-We're actively improving this plugin to support deeper model analysis and broader use cases. Planned enhancements include:
+## 🔮 Future Enhancements
 
-### 🚧 Next Steps
+We're actively improving this plugin with planned features:
 
-1. **Model Flexibility**
-   Adapt the pipeline to support any image encoder or vision-language model beyond CLIP/OpenCLIP.
+### **🚧 Coming Soon**
+1. **Multi-Model Support**: Support for any vision-language model beyond CLIP
+2. **Interactive Concept Editing**: Modify concept weights and see impact on predictions
+3. **Concept Clustering**: Group similar concepts for higher-level analysis
+4. **Export Capabilities**: Save concept analysis results for external use
 
-2. **Multi-Class Support**
-   Enable selection and decomposition for multiple class labels simultaneously in class-level views.
-
-3. **Extended Experiment Panels**
-   New pages to explore deeper insights and interventions:
-
-   * 📏 **Zero-Shot Accuracy & Cosine Similarity** — Evaluate alignment between concept activations and ground truth.
-   * 🧪 **Intervention Studies** — Test how altering concept activations affects model outputs.
-   * 🔍 **Retrieval Benchmarks** — Use concept signatures for dataset or sample retrieval.
+### **🔬 Advanced Features**
+- **Concept Intervention Studies**: Test how changing concepts affects model outputs
+- **Retrieval Benchmarks**: Use concept signatures for similarity search
+- **Zero-Shot Evaluation**: Assess concept alignment with ground truth labels
 
 ## 🧠 Based On Research
 
@@ -144,8 +199,7 @@ This plugin implements the decomposition techniques from:
 > *Usha Bhalla, Alex Oesterling, Suraj Srinivas, Flavio P. Calmon, Himabindu Lakkaraju*
 > [arXiv:2402.10376v2](https://arxiv.org/abs/2402.10376)
 
-Use this to bring **mechanistic interpretability** to your visual embeddings.
-
+Bring **mechanistic interpretability** to your visual embeddings with this research-backed approach.
 
 ## 🙌 Credits
 

@@ -1,6 +1,8 @@
 import fiftyone.operators as foo
 from fiftyone.operators.types import View, Object, Choices, Property, GridView, TableView, Object as TypeObject
 from collections import defaultdict
+import numpy as np
+from scipy.sparse import csr_matrix
 
 
 class DecomposeCorePanel(foo.Panel):
@@ -12,20 +14,65 @@ class DecomposeCorePanel(foo.Panel):
             description="Show SpLiCE decomposition for image and dataset",
             dynamic=True,
         )
+    def load_panel_data(self, ctx):
+        if hasattr(self, "_cache"):
+            return self._cache
+        
+        label_field = ctx.params.get("label_field", "concepts")
+        top_k = ctx.params.get("top_k", 20)
+        dataset = ctx.dataset
 
-    def on_load(self, ctx, init=False):
+        ids = dataset.values("id")
+        id_2_index = {sid: idx for idx, sid in enumerate(ids)}
+        num_samples = len(ids)
+
+        labels_array = np.array(
+            dataset.values(f"{label_field}.classifications.label")
+        )
+
+        weights_array = np.array(
+            dataset.values(f"{label_field}.classifications.weight"),
+            dtype=np.float32,
+        )
+
+        vocabulary = np.unique(labels_array[labels_array != None])
+        col_indices = np.searchsorted(vocabulary, labels_array)
+
+        valid_mask = labels_array != None
+        row_indices = np.repeat(np.arange(num_samples), labels_array.shape[1])
+        row_indices = row_indices[valid_mask.flatten()]
+        col_indices_flat = col_indices.flatten()[valid_mask.flatten()]
+        weights_flat = weights_array.flatten()[valid_mask.flatten()]
+
+        concept_array = csr_matrix(
+            (weights_flat, (row_indices, col_indices_flat)),
+            shape=(num_samples, len(vocabulary)),
+        )
+
+        self._cache = {
+            "concept_array": concept_array,
+            "vocabulary": vocabulary,
+            "id_2_index": id_2_index,
+            "top_k": top_k,
+            "l0_norms": np.array(
+                dataset.values(f"{label_field}.l0_norm"),
+                dtype=np.float32,
+            ),
+            "cosine_sims": np.array(
+                dataset.values(f"{label_field}.reconstruction_error"),
+                dtype=np.float32,
+            ),
+            "all_class_labels": np.array(
+                dataset.values("ground_truth.detections.label"),
+                dtype=object,
+            ),
+        }
+
+    def on_load(self, ctx, init=True):
         ctx.panel.state.set("page", 1)
         self._update(ctx)
-
-    def on_class_change(self, ctx):
-        self._update(ctx)
-
-    def go_to_page_4(self, ctx):
-        ctx.panel.state.set("page", 4)
-        self._update(ctx)
-
-    def go_to_page_3(self, ctx):
-        ctx.panel.state.set("page", 3)
+    
+    def on_change_ctx(self, ctx):
         self._update(ctx)
 
     def go_to_page_2(self, ctx):
@@ -38,231 +85,97 @@ class DecomposeCorePanel(foo.Panel):
 
     def _update(self, ctx):
         page = ctx.panel.get_state("page", 1)
-        label_field = ctx.params.get("label_field", "concepts")
+
+        self.load_panel_data(ctx)
+        concept_array = self._cache["concept_array"]
+        vocabulary = self._cache["vocabulary"]
+        id_2_index = self._cache["id_2_index"]
+        top_k = self._cache["top_k"]
+        all_class_labels = self._cache["all_class_labels"]
+        l0_norms = self._cache.get("l0_norms", None)
+        cosine_sims = self._cache.get("cosine_sims", None)
+
+        # Check if selected or view
+        ids = ctx.selected if ctx.selected else ctx.view.values("id")
+        analysis_source = "Selected Samples" if ctx.selected else "Current View"
+        indices = [id_2_index[_id] for _id in ids if _id in id_2_index]
+
+        # Subset concept matrix directly using indices
+        subset = concept_array[indices]
 
         if page == 1:
-            # Dataset-level aggregation
-            concept_agg = defaultdict(list)
-            total_samples = 0
-            all_l0_norms = []
-            all_cosine_sims = []
+            mean_weights = subset.mean(axis=0).A1
+            counts = (subset > 0).sum(axis=0).A1
 
-            for sample in ctx.dataset:
-                labels_obj = sample[label_field] if label_field in sample else None
-                if not labels_obj or not labels_obj.classifications:
-                    continue
-                
-                total_samples += 1
-                for classification in labels_obj.classifications:
-                    concept_agg[classification.label].append(classification.weight)
-                
-                if hasattr(labels_obj, 'l0_norm') and labels_obj.l0_norm is not None:
-                    all_l0_norms.append(labels_obj.l0_norm)
-                if hasattr(labels_obj, 'reconstruction_error') and labels_obj.reconstruction_error is not None:
-                    all_cosine_sims.append(labels_obj.reconstruction_error)
-
-            concept_stats = [
-                {
-                    "concept": name,
-                    "mean_weight": sum(weights) / len(weights),
-                    "count": len(weights),
-                }
-                for name, weights in concept_agg.items()
-            ]
-            concept_stats = sorted(concept_stats, key=lambda x: x["mean_weight"], reverse=True)[:20]
-
-            ctx.panel.state.set("dataset_table", concept_stats)
+            mask = counts > 0
+            i = np.argsort(-mean_weights[mask])[:top_k]
+            v, w, n = vocabulary[mask][i], mean_weights[mask][i], counts[mask][i]
 
             ctx.panel.state.set(
+                "dataset_table",
+                [dict(concept=c, mean_weight=float(m), count=int(k)) for c, m, k in zip(v, w, n)]
+            )
+            ctx.panel.state.set(
                 "dataset_plot",
-                {
-                    "x": [c["mean_weight"] for c in concept_stats],
-                    "y": [c["concept"] for c in concept_stats],
-                    "type": "bar",
-                    "orientation": "h",
-                },
+                dict(x=w.tolist(), y=v.tolist(), type="bar", orientation="h")
             )
 
-            avg_l0 = sum(all_l0_norms) / len(all_l0_norms) if all_l0_norms else 0
-            avg_cos = sum(all_cosine_sims) / len(all_cosine_sims) if all_cosine_sims else 0
-            
+            subset_l0 = l0_norms[indices] if l0_norms is not None else None
+            subset_cos = cosine_sims[indices] if cosine_sims is not None else None
+            avg_l0 = np.nanmean(subset_l0) if subset_l0 is not None and subset_l0.size else 0.0
+            avg_cos = np.nanmean(subset_cos) if subset_cos is not None and subset_cos.size else 0.0
+
             ctx.panel.state.set(
                 "dataset_info_md",
                 f"""
-                ###### 📉 Decomposition Statistics
+                ###### 📉 Decomposition Statistics ({analysis_source})
                 | Metric | Value |
                 |--------|-------|
                 | **Avg. Decomposition L0 Norm** | `{avg_l0:.4f}` |
                 | **Avg. CLIP–SpLiCE Cosine Similarity** | `{avg_cos:.4f}` |
+                | **Samples Analyzed** | `{subset.shape[0]}` |
                 """
             )
 
         elif page == 2:
-            # Class-level aggregation
-            all_detections = ctx.dataset.values("ground_truth.detections.label")
+            # Page 2: Spurious correlation analysis
+            labels_map = {idx: all_class_labels[idx] for idx in indices}
 
-            labels = set()
-            for dets in all_detections:
-                if dets:
-                    labels.update(dets)
-
-            label_choices = sorted(labels)
-            ctx.panel.state.set("class_choices", label_choices)
-
-            selected_class = ctx.panel.get_state("selected_class", label_choices[0] if label_choices else None)
-            ctx.panel.state.set("selected_class", selected_class)
-
-            concept_agg = defaultdict(list)
-            filtered_l0 = []
-            filtered_cos = []
-
-            for sample in ctx.dataset:
-                # Check if this sample has the selected class
-                detections = getattr(sample, "ground_truth", None)
-                if not detections or not detections.detections:
-                    continue
-                
-                sample_labels = [det.label for det in detections.detections]
-                if selected_class not in sample_labels:
-                    continue
-                
-                # Get concept classifications
-                labels_obj = sample[label_field] if label_field in sample else None
-                if not labels_obj or not labels_obj.classifications:
-                    continue
-                
-                for classification in labels_obj.classifications:
-                    concept_agg[classification.label].append(classification.weight)
-                
-                if hasattr(labels_obj, 'l0_norm') and labels_obj.l0_norm is not None:
-                    filtered_l0.append(labels_obj.l0_norm)
-                if hasattr(labels_obj, 'reconstruction_error') and labels_obj.reconstruction_error is not None:
-                    filtered_cos.append(labels_obj.reconstruction_error)
-
-            concept_stats = [
-                {
-                    "concept": name,
-                    "mean_weight": sum(weights) / len(weights),
-                    "count": len(weights),
-                }
-                for name, weights in concept_agg.items()
-            ]
-            concept_stats = sorted(concept_stats, key=lambda x: x["mean_weight"], reverse=True)[:20]
-
-            ctx.panel.state.set("class_table", concept_stats)
-
-            ctx.panel.state.set(
-                "class_plot",
-                {
-                    "x": [c["mean_weight"] for c in concept_stats],
-                    "y": [c["concept"] for c in concept_stats],
-                    "type": "bar",
-                    "orientation": "h",
-                },
-            )
-
-            if filtered_l0:
-                avg_l0 = sum(filtered_l0) / len(filtered_l0)
-                avg_cos = sum(filtered_cos) / len(filtered_cos) if filtered_cos else 0
-                ctx.panel.state.set(
-                    "class_info_md",
-                    f"""
-                    ###### 📊 Class Decomposition Summary for `{selected_class}`
-
-                    | Metric | Value |
-                    |--------|-------|
-                    | **Avg. Decomposition L0 Norm** | `{avg_l0:.4f}` |
-                    | **Avg. CLIP–SpLiCE Cosine Similarity** | `{avg_cos:.4f}` |
-                    """
-                )
-        elif page == 3:
-            sel = ctx.selected
-            if not sel:
-                ctx.panel.state.set("concept_data", None)
-                ctx.panel.state.set("image_info_md", "⚠️ No sample selected.")
-                return
-
-            sample = ctx.dataset[sel[0]]
-            labels_obj = sample[label_field] if label_field in sample else None
-            if not labels_obj or not labels_obj.classifications:
-                ctx.panel.state.set("concept_data", None)
-                ctx.panel.state.set("image_info_md", "⚠️ No concept decomposition found.")
-                return
-
-            x = [c.weight for c in labels_obj.classifications]
-            y = [c.label for c in labels_obj.classifications]
-
-            concept_table = [
-                {"concept": c.label, "mean_weight": c.weight, "count": 1}
-                for c in labels_obj.classifications
-            ]
-
-            l0 = getattr(labels_obj, "l0_norm", 0)
-            cos = getattr(labels_obj, "reconstruction_error", 0)
-            filename = sample.filepath.split("/")[-1]
-
-            ctx.panel.state.set(
-                "concept_data",
-                {
-                    "x": x,
-                    "y": y,
-                    "type": "bar",
-                    "orientation": "h",
-                },
-            )
-            ctx.panel.state.set("image_table", concept_table)
-
-            ctx.panel.state.set(
-                "image_info_md",
-                f"""
-                ###### 🖼️ Decomposition Info for `{filename}`
-
-                | Metric | Value |
-                |--------|-------|
-                | **Decomposition L0 Norm** | `{l0:.4f}` |
-                | **CLIP–SpLiCE Cosine Similarity** | `{cos:.4f}` |
-                """
-            )
-        elif page == 4:
-            # Spurious correlation analysis
+            # Initialize structures
             concept_hist = defaultdict(lambda: defaultdict(int))
-            all_concepts = set()
-            all_classes = set()
+            
+            # Use COO representation for efficient iteration
+            coo = subset.tocoo()
+            concepts = vocabulary[coo.col]
 
-            for sample in ctx.dataset:
-                # Get detections
-                detections = getattr(sample, "ground_truth", None)
-                if not detections or not detections.detections:
+            for row_idx, concept in zip(coo.row, concepts):
+                global_idx = indices[row_idx]
+                classes = labels_map.get(global_idx)
+                if not classes:
                     continue
-                
-                sample_labels = [det.label for det in detections.detections]
-                all_classes.update(sample_labels)
-                
-                # Get concept classifications
-                labels_obj = sample[label_field] if label_field in sample else None
-                if not labels_obj or not labels_obj.classifications:
-                    continue
-                
-                for classification in labels_obj.classifications:
-                    all_concepts.add(classification.label)
-                    for cls in sample_labels:
-                        concept_hist[classification.label][cls] += 1
 
-            concept_choices = sorted(all_concepts)
+                for cls in classes:
+                    concept_hist[concept][cls] += 1
+
+            concept_choices = sorted(concept_hist.keys())
             ctx.panel.state.set("concept_choices", concept_choices)
 
-            selected_concept = ctx.panel.get_state("selected_concept", concept_choices[0] if concept_choices else None)
+            selected_concept = ctx.panel.get_state(
+                "selected_concept",
+                concept_choices[0] if concept_choices else None,
+            )
             ctx.panel.state.set("selected_concept", selected_concept)
 
-            data = concept_hist[selected_concept]
-            ctx.panel.state.set(
-                "spurious_plot",
-                {
-                    "x": list(data.keys()),
-                    "y": list(data.values()),
-                    "type": "bar",
-                }
-            )
+            if selected_concept:
+                data = concept_hist[selected_concept]
+                ctx.panel.state.set(
+                    "spurious_plot",
+                    {
+                        "x": list(data.keys()),
+                        "y": list(data.values()),
+                        "type": "bar",
+                    }
+                )
 
     def render(self, ctx):
         view = GridView(align_x="center", align_y="center", orientation="vertical", height=100, width=100, gap=2)
@@ -280,19 +193,27 @@ class DecomposeCorePanel(foo.Panel):
             panel.md(
                 """
  
-                #### 🧬 Dataset-Level Concept Summary 📊
+                #### 🧬 Comprehensive Concept Analysis 📊
 
-                Welcome to the **SpLiCE Global View**! This page shows an overview of the most significant concepts across your entire dataset.
+                Welcome to the **SpLiCE Unified View**! This page combines dataset-level, class-level, and image-level concept analysis in one comprehensive interface.
                 
                 &nbsp;
 
-                #####  📌 What You See:
-                - 🧠 **Top 10 Concepts** ranked by their average contribution
-                - 📈 **Mean Weight**: how influential each concept is across all samples
-                - 🔢 **Count**: how many samples each concept appeared in
+                #####  📌 What You Can Do Here:
+                - 🧠 **Dataset Overview**: See top concepts across your current view with dynamic updates
+                - 🏷️ **Class Analysis**: Select any class from the dropdown below to see associated concepts
+                - 🖼️ **Image Details**: Select any image in FiftyOne to see its individual concept decomposition
+                - 📈 **Dynamic Updates**: All statistics automatically update based on your current view and selections
 
+                #####  🔄 How to Use:
+                1. **Filter your dataset** using FiftyOne's view controls to analyze specific subsets
+                2. **Select a class** from the dropdown to see concepts for that specific category
+                3. **Click on any image** in the FiftyOne grid to see its detailed concept breakdown
+                4. **Navigate to Page 2** for spurious correlation analysis
+
+                PDT: Concept weights are aggregated per sample before computing mean weights across samples.
                 """, 
-                name="dataset_intro"
+                name="unified_intro"
             )
 
             panel.list("dataset_table", TypeObject(), view=table, label="Top Concepts")
@@ -311,65 +232,6 @@ class DecomposeCorePanel(foo.Panel):
             panel.md("&nbsp;", name="spacer")
 
         elif page == 2:
-            panel.md("&nbsp;", name="spacer")
-            panel.md("#### 🏷️ Class-Level Decomposition", name="class_title")
-
-            class_choices = ctx.panel.state.get("class_choices", [])
-            panel.enum(
-                "selected_class",
-                class_choices,
-                default=class_choices[0] if class_choices else None,
-                on_change=self.on_class_change,
-                label="Select Class Label"
-            )
-
-            table = TableView()
-            table.add_column("concept", label="Concept")
-            table.add_column("mean_weight", label="Mean Weight")
-            table.add_column("count", label="Count")
-
-            panel.list("class_table", TypeObject(), view=table, label="Top Concepts for Class")
-
-            panel.plot(
-                "class_plot",
-                layout={
-                    "title": {"text": f"Top Concept Distribution for {ctx.panel.state.get('selected_class', '')}", "xanchor": "center"},
-                    "xaxis": {"title": "Mean Weight"},
-                    "yaxis": {"title": "Concept", "autorange": "reversed"},
-                    "margin": {"l": 150, "t": 60},
-                },
-                width=100,
-            )
-            
-            panel.md(ctx.panel.state.get("class_info_md", ""), name="class_stats", label=None)
-            panel.md("&nbsp;", name="spacer")
-        elif page == 3:
-            panel.md("&nbsp;", name="spacer")
-            panel.md("#### 🖼️ Image-Level Decomposition", name="image_title")
-            panel.btn("refresh_image", label="🔄 Refresh to see new image", on_click=self._update)
-
-            table = TableView()
-            table.add_column("concept", label="Concept")
-            table.add_column("mean_weight", label="Weight")
-            table.add_column("count", label="Count")
-
-            panel.list("image_table", TypeObject(), view=table, label="Concept Decomposition Table")
-
-            panel.plot(
-                "concept_data",
-                layout={
-                    "title": {"text": "Concept Decomposition for Selected Image", "xanchor": "center"},
-                    "xaxis": {"title": "Weight"},
-                    "yaxis": {"title": "Concept", "autorange": "reversed"},
-                    "margin": {"l": 150, "t": 60},
-                },
-                width=100,
-            )
-
-            panel.md(ctx.panel.state.get("image_info_md", ""), name="image_stats", label=None)
-            panel.md("&nbsp;", name="spacer")
-
-        elif page == 4:
             panel.md(
                 """
                 &nbsp;
@@ -397,7 +259,6 @@ class DecomposeCorePanel(foo.Panel):
                 "selected_concept",
                 concept_choices,
                 default=concept_choices[0] if concept_choices else None,
-                on_change=self._update,
                 label="Select Concept",
             )
 
@@ -417,10 +278,10 @@ class DecomposeCorePanel(foo.Panel):
 
         panel.arrow_nav(
             "page_nav",
-            forward=page < 4,
+            forward=page < 2,
             backward=page > 1,
-            on_forward=self.go_to_page_2 if page == 1 else self.go_to_page_3 if page == 2 else self.go_to_page_4,
-            on_backward=self.go_to_page_1 if page == 2 else self.go_to_page_2 if page == 3 else self.go_to_page_3,
+            on_forward=self.go_to_page_2 if page == 1 else None,
+            on_backward=self.go_to_page_1 if page == 2 else None,
         )
 
         return Property(panel, view=view)
@@ -428,3 +289,6 @@ class DecomposeCorePanel(foo.Panel):
 
 def register(p):
     p.register(DecomposeCorePanel)
+
+
+##
